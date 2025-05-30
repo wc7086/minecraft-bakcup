@@ -1,0 +1,30 @@
+# 编译产物
+minecraft-backup
+minecraft-backup-*
+
+# 发布目录
+release/
+
+# 配置文件（包含敏感信息）
+config.toml
+credentials
+restic-password
+.config/
+
+# IDE 和编辑器文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# 测试文件
+*.test
+*.out
+
+# 临时文件
+*.tmp
+*.log 

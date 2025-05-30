@@ -1,0 +1,58 @@
+# Minecraft 备份工具配置文件示例
+# 将此文件复制为 config.toml 并修改相应的值
+
+[general]
+# Minecraft Docker 容器名称
+container_name = "minecraft-mc-1"
+
+# 世界文件目录（主机路径）
+# 支持 ~ 表示用户主目录
+world_dir = "~/docker/minecraft"
+
+# 备份标签（用于标识和过滤备份）
+backup_tag = "minecraft-world"
+
+# 主机标识（默认为主机名）
+# 用于区分不同服务器的备份
+backup_host = "my-minecraft-server"
+
+[aws]
+# Cloudflare R2 访问密钥 ID
+# 从 Cloudflare 控制台获取
+access_key_id = "your_r2_access_key_id_here"
+
+# Cloudflare R2 访问密钥
+# 从 Cloudflare 控制台获取
+secret_access_key = "your_r2_secret_access_key_here"
+
+# AWS 区域
+# Cloudflare R2 使用 "auto"
+region = "auto"
+
+[restic]
+# Restic 仓库地址
+# 格式: s3:https://[account-id].r2.cloudflarestorage.com/[bucket-name]
+# account-id: 你的 Cloudflare 账户 ID
+# bucket-name: 你在 R2 中创建的存储桶名称
+repository = "s3:https://your-account-id.r2.cloudflarestorage.com/minecraft-backup"
+
+# Restic 仓库密码
+# 用于加密备份数据，请使用强密码并妥善保管
+# 丢失此密码将无法恢复备份！
+password = "your_strong_restic_repository_password_here"
+
+[retention]
+# 快照保留策略
+# 根据你的需求调整这些值
+
+# 保留最近 N 天的每日快照
+keep_daily = 7
+
+# 保留最近 N 周的每周快照
+keep_weekly = 4
+
+# 保留最近 N 月的每月快照
+keep_monthly = 6
+
+# 始终保留最近的 N 个快照
+keep_last = 3 
