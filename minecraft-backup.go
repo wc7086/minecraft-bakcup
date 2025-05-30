@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -16,8 +17,8 @@ import (
 
 // TOMLConfig 是 TOML 配置文件的结构
 type TOMLConfig struct {
-	// 基础配置
-	General GeneralConfig `toml:"general"`
+	// 全局配置
+	Global GlobalConfig `toml:"global"`
 	
 	// AWS/R2 凭证
 	AWS AWSConfig `toml:"aws"`
@@ -27,14 +28,29 @@ type TOMLConfig struct {
 	
 	// 备份策略
 	Retention RetentionConfig `toml:"retention"`
+	
+	// 服务器列表
+	Servers map[string]ServerConfig `toml:"servers"`
 }
 
-// GeneralConfig 通用配置
-type GeneralConfig struct {
+// GlobalConfig 全局配置
+type GlobalConfig struct {
+	// 默认备份主机标识
+	DefaultBackupHost string `toml:"default_backup_host"`
+	// 是否并行备份
+	ParallelBackup bool `toml:"parallel_backup"`
+	// 最大并发数
+	MaxConcurrency int `toml:"max_concurrency"`
+}
+
+// ServerConfig 单个服务器配置
+type ServerConfig struct {
 	ContainerName string `toml:"container_name"`
 	WorldDir      string `toml:"world_dir"`
 	BackupTag     string `toml:"backup_tag"`
 	BackupHost    string `toml:"backup_host"`
+	Enabled       bool   `toml:"enabled"`
+	Description   string `toml:"description"`
 }
 
 // AWSConfig AWS/R2 凭证配置
@@ -58,7 +74,7 @@ type RetentionConfig struct {
 	KeepLast    int `toml:"keep_last"`
 }
 
-// Config 运行时配置（合并了 TOML 配置和环境变量）
+// Config 运行时配置（单个服务器）
 type Config struct {
 	// Minecraft 容器配置
 	MCContainer string
@@ -85,6 +101,32 @@ type Config struct {
 	// AWS 凭证
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
+}
+
+// MultiServerConfig 多服务器运行时配置
+type MultiServerConfig struct {
+	// 配置文件路径
+	ConfigFile string
+	
+	// 全局配置
+	ParallelBackup bool
+	MaxConcurrency int
+	
+	// AWS 凭证和 Restic 配置（所有服务器共享）
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+	AWSRegion          string
+	ResticRepository   string
+	ResticPassword     string
+	
+	// 快照保留策略（所有服务器共享）
+	KeepDaily   int
+	KeepWeekly  int
+	KeepMonthly int
+	KeepLast    int
+	
+	// 服务器列表
+	Servers map[string]*Config
 }
 
 // Logger 结构体
@@ -140,20 +182,17 @@ func createSampleConfig(configPath string) error {
 	homeDir, _ := os.UserHomeDir()
 
 	// 创建示例配置
-	sampleConfig := `# Minecraft 备份工具配置文件
+	sampleConfig := `# Minecraft 多服务器备份工具配置文件
 
-[general]
-# Minecraft Docker 容器名称
-container_name = "minecraft-mc-1"
+[global]
+# 默认备份主机标识（当服务器未设置时使用）
+default_backup_host = "%s"
 
-# 世界文件目录（主机路径）
-world_dir = "%s/docker/minecraft"
+# 是否启用并行备份（同时备份多个服务器）
+parallel_backup = false
 
-# 备份标签（用于标识备份）
-backup_tag = "minecraft-test"
-
-# 主机标识（默认为主机名）
-backup_host = "%s"
+# 最大并发数（仅在启用并行备份时有效）
+max_concurrency = 2
 
 [aws]
 # AWS/R2 访问密钥 ID
@@ -174,15 +213,75 @@ repository = "s3:https://your-account-id.r2.cloudflarestorage.com/minecraft-back
 password = "your_restic_repository_password_here"
 
 [retention]
-# 快照保留策略
+# 快照保留策略（适用于所有服务器）
 keep_daily = 9      # 保留每日快照数量
 keep_weekly = 14    # 保留每周快照数量
 keep_monthly = 8    # 保留每月快照数量
 keep_last = 12      # 保留最近快照数量
+
+# 服务器配置
+# 每个服务器一个配置块，格式为 [servers.服务器名称]
+
+[servers.survival]
+# 服务器描述
+description = "生存服务器"
+
+# Minecraft Docker 容器名称
+container_name = "minecraft-survival"
+
+# 世界文件目录（主机路径）
+world_dir = "%s/docker/minecraft-survival"
+
+# 备份标签（用于标识备份）
+backup_tag = "minecraft-survival"
+
+# 主机标识（可选，未设置时使用全局默认值）
+backup_host = "%s"
+
+# 是否启用此服务器的备份
+enabled = true
+
+[servers.creative]
+# 服务器描述
+description = "创造服务器"
+
+# Minecraft Docker 容器名称
+container_name = "minecraft-creative"
+
+# 世界文件目录（主机路径）
+world_dir = "%s/docker/minecraft-creative"
+
+# 备份标签（用于标识备份）
+backup_tag = "minecraft-creative"
+
+# 主机标识（可选，未设置时使用全局默认值）
+backup_host = "%s"
+
+# 是否启用此服务器的备份
+enabled = false
+
+[servers.modded]
+# 服务器描述
+description = "模组服务器"
+
+# Minecraft Docker 容器名称
+container_name = "minecraft-modded"
+
+# 世界文件目录（主机路径）
+world_dir = "%s/docker/minecraft-modded"
+
+# 备份标签（用于标识备份）
+backup_tag = "minecraft-modded"
+
+# 主机标识（可选，未设置时使用全局默认值）
+backup_host = "%s"
+
+# 是否启用此服务器的备份
+enabled = true
 `
 
 	// 格式化配置内容
-	configContent := fmt.Sprintf(sampleConfig, homeDir, hostname)
+	configContent := fmt.Sprintf(sampleConfig, hostname, homeDir, hostname, homeDir, hostname, homeDir, hostname, hostname)
 
 	// 写入文件，设置安全权限
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
@@ -194,14 +293,17 @@ keep_last = 12      # 保留最近快照数量
 	logger.Log("请编辑配置文件并填入正确的信息：")
 	logger.Log("  1. 修改 [aws] 部分，填入您的 R2 凭证")
 	logger.Log("  2. 修改 [restic] 部分，设置仓库地址和密码")
-	logger.Log("  3. 根据需要调整其他配置")
-	logger.Log("  4. 重新运行程序")
+	logger.Log("  3. 修改 [servers] 部分，配置您的 Minecraft 服务器")
+	logger.Log("     - 启用需要备份的服务器（enabled = true）")
+	logger.Log("     - 设置正确的容器名称和世界目录")
+	logger.Log("  4. 根据需要调整其他配置")
+	logger.Log("  5. 重新运行程序")
 
 	return nil
 }
 
-// loadConfig 加载配置文件
-func loadConfig(configPath string) (*Config, error) {
+// loadConfig 加载配置文件并解析为多服务器配置
+func loadConfig(configPath string) (*MultiServerConfig, error) {
 	// 检查配置文件是否存在
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("配置文件不存在: %s", configPath)
@@ -230,13 +332,22 @@ func loadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
 	}
 
-	// 转换为运行时配置
-	config := &Config{
+	// 获取默认主机名
+	defaultHost := tomlConfig.Global.DefaultBackupHost
+	if defaultHost == "" {
+		defaultHost, _ = os.Hostname()
+	}
+
+	// 设置默认值
+	if tomlConfig.Global.MaxConcurrency <= 0 {
+		tomlConfig.Global.MaxConcurrency = 2
+	}
+
+	// 转换为多服务器运行时配置
+	multiConfig := &MultiServerConfig{
 		ConfigFile:         configPath,
-		MCContainer:        tomlConfig.General.ContainerName,
-		WorldDir:           tomlConfig.General.WorldDir,
-		BackupTag:          tomlConfig.General.BackupTag,
-		BackupHost:         tomlConfig.General.BackupHost,
+		ParallelBackup:     tomlConfig.Global.ParallelBackup,
+		MaxConcurrency:     tomlConfig.Global.MaxConcurrency,
 		AWSAccessKeyID:     tomlConfig.AWS.AccessKeyID,
 		AWSSecretAccessKey: tomlConfig.AWS.SecretAccessKey,
 		AWSRegion:          tomlConfig.AWS.Region,
@@ -246,22 +357,68 @@ func loadConfig(configPath string) (*Config, error) {
 		KeepWeekly:         tomlConfig.Retention.KeepWeekly,
 		KeepMonthly:        tomlConfig.Retention.KeepMonthly,
 		KeepLast:           tomlConfig.Retention.KeepLast,
+		Servers:            make(map[string]*Config),
 	}
 
-	// 展开环境变量（如果路径中包含 ~）
-	if strings.HasPrefix(config.WorldDir, "~/") {
-		homeDir, _ := os.UserHomeDir()
-		config.WorldDir = filepath.Join(homeDir, config.WorldDir[2:])
+	// 检查是否有服务器配置
+	if len(tomlConfig.Servers) == 0 {
+		return nil, fmt.Errorf("配置文件中未找到任何服务器配置")
 	}
 
-	// 设置环境变量
-	os.Setenv("AWS_ACCESS_KEY_ID", config.AWSAccessKeyID)
-	os.Setenv("AWS_SECRET_ACCESS_KEY", config.AWSSecretAccessKey)
-	os.Setenv("AWS_DEFAULT_REGION", config.AWSRegion)
-	os.Setenv("RESTIC_REPOSITORY", config.ResticRepository)
-	os.Setenv("RESTIC_PASSWORD", config.ResticPassword)
+	// 转换服务器配置
+	for serverName, serverConfig := range tomlConfig.Servers {
+		// 跳过未启用的服务器
+		if !serverConfig.Enabled {
+			logger.Log("跳过未启用的服务器: %s", serverName)
+			continue
+		}
 
-	return config, nil
+		// 设置备份主机（如果未设置则使用默认值）
+		backupHost := serverConfig.BackupHost
+		if backupHost == "" {
+			backupHost = defaultHost
+		}
+
+		// 展开环境变量（如果路径中包含 ~）
+		worldDir := serverConfig.WorldDir
+		if strings.HasPrefix(worldDir, "~/") {
+			homeDir, _ := os.UserHomeDir()
+			worldDir = filepath.Join(homeDir, worldDir[2:])
+		}
+
+		config := &Config{
+			ConfigFile:         configPath,
+			MCContainer:        serverConfig.ContainerName,
+			WorldDir:           worldDir,
+			BackupTag:          serverConfig.BackupTag,
+			BackupHost:         backupHost,
+			AWSAccessKeyID:     multiConfig.AWSAccessKeyID,
+			AWSSecretAccessKey: multiConfig.AWSSecretAccessKey,
+			AWSRegion:          multiConfig.AWSRegion,
+			ResticRepository:   multiConfig.ResticRepository,
+			ResticPassword:     multiConfig.ResticPassword,
+			KeepDaily:          multiConfig.KeepDaily,
+			KeepWeekly:         multiConfig.KeepWeekly,
+			KeepMonthly:        multiConfig.KeepMonthly,
+			KeepLast:           multiConfig.KeepLast,
+		}
+
+		multiConfig.Servers[serverName] = config
+	}
+
+	// 检查是否有启用的服务器
+	if len(multiConfig.Servers) == 0 {
+		return nil, fmt.Errorf("没有启用的服务器，请在配置文件中将需要备份的服务器设置为 enabled = true")
+	}
+
+	// 设置环境变量（所有服务器共享）
+	os.Setenv("AWS_ACCESS_KEY_ID", multiConfig.AWSAccessKeyID)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", multiConfig.AWSSecretAccessKey)
+	os.Setenv("AWS_DEFAULT_REGION", multiConfig.AWSRegion)
+	os.Setenv("RESTIC_REPOSITORY", multiConfig.ResticRepository)
+	os.Setenv("RESTIC_PASSWORD", multiConfig.ResticPassword)
+
+	return multiConfig, nil
 }
 
 // checkDependencies 检查系统依赖
@@ -304,24 +461,34 @@ func checkNetwork() {
 }
 
 // showConfig 显示当前配置
-func showConfig(config *Config) {
-	logger.Log("当前备份配置：")
-	logger.Log("  配置文件: %s", config.ConfigFile)
-	logger.Log("  容器名称: %s", config.MCContainer)
-	logger.Log("  世界目录: %s", config.WorldDir)
-	logger.Log("  备份标签: %s", config.BackupTag)
-	logger.Log("  主机标识: %s", config.BackupHost)
+func showConfig(multiConfig *MultiServerConfig) {
+	logger.Log("多服务器备份配置：")
+	logger.Log("  配置文件: %s", multiConfig.ConfigFile)
+	logger.Log("  并行备份: %t", multiConfig.ParallelBackup)
+	if multiConfig.ParallelBackup {
+		logger.Log("  最大并发: %d", multiConfig.MaxConcurrency)
+	}
 	logger.Log("  保留策略:")
-	logger.Log("    - 每日快照: %d 个", config.KeepDaily)
-	logger.Log("    - 每周快照: %d 个", config.KeepWeekly)
-	logger.Log("    - 每月快照: %d 个", config.KeepMonthly)
-	logger.Log("    - 最近快照: %d 个", config.KeepLast)
-	repoDisplay := config.ResticRepository
+	logger.Log("    - 每日快照: %d 个", multiConfig.KeepDaily)
+	logger.Log("    - 每周快照: %d 个", multiConfig.KeepWeekly)
+	logger.Log("    - 每月快照: %d 个", multiConfig.KeepMonthly)
+	logger.Log("    - 最近快照: %d 个", multiConfig.KeepLast)
+	repoDisplay := multiConfig.ResticRepository
 	if len(repoDisplay) > 50 {
 		repoDisplay = repoDisplay[:50] + "..."
 	}
 	logger.Log("  仓库地址: %s", repoDisplay)
 	logger.Log("")
+	
+	logger.Log("启用的服务器列表：")
+	for serverName, config := range multiConfig.Servers {
+		logger.Log("  [%s]", serverName)
+		logger.Log("    容器名称: %s", config.MCContainer)
+		logger.Log("    世界目录: %s", config.WorldDir)
+		logger.Log("    备份标签: %s", config.BackupTag)
+		logger.Log("    主机标识: %s", config.BackupHost)
+		logger.Log("")
+	}
 }
 
 // checkContainerRunning 检查容器是否运行
@@ -519,6 +686,141 @@ func getLatestSnapshotInfo() {
 	cmd.Run()
 }
 
+// backupSingleServer 备份单个服务器
+func backupSingleServer(serverName string, config *Config) error {
+	logger.Log("开始备份服务器: %s", serverName)
+	
+	// 检查容器是否运行
+	if err := checkContainerRunning(config.MCContainer); err != nil {
+		return fmt.Errorf("服务器 %s: %v", serverName, err)
+	}
+
+	// 设置清理函数
+	saveOnExecuted := false
+	defer func() {
+		cleanup(config.MCContainer, saveOnExecuted)
+	}()
+
+	// 暂停写入
+	logger.Log("[%s] 暂停 Minecraft 世界写入...", serverName)
+	if err := execDockerCommand(config.MCContainer, "rcon-cli", "save-off"); err != nil {
+		return fmt.Errorf("服务器 %s: 无法执行 save-off 命令: %v", serverName, err)
+	}
+
+	if err := execDockerCommand(config.MCContainer, "rcon-cli", "save-all"); err != nil {
+		return fmt.Errorf("服务器 %s: 无法执行 save-all 命令: %v", serverName, err)
+	}
+
+	// 等待保存完成
+	waitForSaveCompletion(config.MCContainer, config.WorldDir)
+
+	// 执行备份
+	if err := performBackup(config); err != nil {
+		return fmt.Errorf("服务器 %s: 备份失败: %v", serverName, err)
+	}
+
+	// 恢复写入
+	logger.Log("[%s] 恢复 Minecraft 世界写入...", serverName)
+	if err := execDockerCommand(config.MCContainer, "rcon-cli", "save-on"); err != nil {
+		logger.Log("警告: 服务器 %s 无法执行 save-on 命令，请手动检查", serverName)
+	} else {
+		saveOnExecuted = true
+	}
+
+	logger.Log("[%s] 服务器备份完成", serverName)
+	return nil
+}
+
+// backupAllServers 备份所有启用的服务器
+func backupAllServers(multiConfig *MultiServerConfig) error {
+	if multiConfig.ParallelBackup {
+		return backupServersParallel(multiConfig)
+	} else {
+		return backupServersSequential(multiConfig)
+	}
+}
+
+// backupServersSequential 顺序备份所有服务器
+func backupServersSequential(multiConfig *MultiServerConfig) error {
+	var failedServers []string
+	successCount := 0
+
+	for serverName, config := range multiConfig.Servers {
+		logger.Log("=" + strings.Repeat("=", 50))
+		if err := backupSingleServer(serverName, config); err != nil {
+			logger.Log("错误: %v", err)
+			failedServers = append(failedServers, serverName)
+		} else {
+			successCount++
+		}
+		logger.Log("=" + strings.Repeat("=", 50))
+		logger.Log("")
+	}
+
+	// 显示备份结果摘要
+	logger.Log("备份结果摘要:")
+	logger.Log("  成功: %d 个服务器", successCount)
+	logger.Log("  失败: %d 个服务器", len(failedServers))
+	
+	if len(failedServers) > 0 {
+		logger.Log("  失败的服务器: %s", strings.Join(failedServers, ", "))
+		return fmt.Errorf("部分服务器备份失败")
+	}
+
+	return nil
+}
+
+// backupServersParallel 并行备份所有服务器
+func backupServersParallel(multiConfig *MultiServerConfig) error {
+	// 创建信号量控制并发数
+	semaphore := make(chan struct{}, multiConfig.MaxConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var failedServers []string
+	successCount := 0
+
+	logger.Log("启用并行备份，最大并发数: %d", multiConfig.MaxConcurrency)
+
+	for serverName, config := range multiConfig.Servers {
+		wg.Add(1)
+		go func(name string, cfg *Config) {
+			defer wg.Done()
+			
+			// 获取信号量
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			logger.Log("[并行] 开始备份服务器: %s", name)
+			if err := backupSingleServer(name, cfg); err != nil {
+				mu.Lock()
+				failedServers = append(failedServers, name)
+				mu.Unlock()
+				logger.Log("[并行] 服务器 %s 备份失败: %v", name, err)
+			} else {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+				logger.Log("[并行] 服务器 %s 备份成功", name)
+			}
+		}(serverName, config)
+	}
+
+	// 等待所有备份完成
+	wg.Wait()
+
+	// 显示备份结果摘要
+	logger.Log("并行备份结果摘要:")
+	logger.Log("  成功: %d 个服务器", successCount)
+	logger.Log("  失败: %d 个服务器", len(failedServers))
+	
+	if len(failedServers) > 0 {
+		logger.Log("  失败的服务器: %s", strings.Join(failedServers, ", "))
+		return fmt.Errorf("部分服务器备份失败")
+	}
+
+	return nil
+}
+
 // cleanupSnapshots 清理旧快照
 func cleanupSnapshots(config *Config) {
 	logger.Log("开始清理旧快照...")
@@ -591,7 +893,7 @@ func main() {
 	}
 
 	// 尝试加载配置文件
-	config, err := loadConfig(configPath)
+	multiConfig, err := loadConfig(configPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "配置文件不存在") {
 			logger.Log("配置文件不存在: %s", configPath)
@@ -612,11 +914,6 @@ func main() {
 	// 检查网络连接
 	checkNetwork()
 
-	// 检查容器是否运行
-	if err := checkContainerRunning(config.MCContainer); err != nil {
-		os.Exit(1)
-	}
-
 	// 验证 restic 仓库连接
 	logger.Log("验证 Restic 仓库连接...")
 	if err := checkRepositoryConnection(); err != nil {
@@ -624,49 +921,31 @@ func main() {
 	}
 
 	// 显示当前配置
-	showConfig(config)
+	showConfig(multiConfig)
 
-	logger.Log("开始备份流程...")
+	logger.Log("开始多服务器备份流程...")
+	logger.Log("共 %d 个服务器需要备份", len(multiConfig.Servers))
 
-	// 设置清理函数
-	saveOnExecuted := false
-	defer func() {
-		cleanup(config.MCContainer, saveOnExecuted)
-	}()
-
-	// 暂停写入
-	logger.Log("暂停 Minecraft 世界写入...")
-	if err := execDockerCommand(config.MCContainer, "rcon-cli", "save-off"); err != nil {
-		logger.Log("错误: 无法执行 save-off 命令")
+	// 备份所有启用的服务器
+	if err := backupAllServers(multiConfig); err != nil {
+		logger.Log("备份流程完成，但存在错误: %v", err)
+		// 显示最新快照信息
+		getLatestSnapshotInfo()
+		// 清理旧快照（使用第一个服务器的配置）
+		for _, config := range multiConfig.Servers {
+			cleanupSnapshots(config)
+			break
+		}
 		os.Exit(1)
-	}
-
-	if err := execDockerCommand(config.MCContainer, "rcon-cli", "save-all"); err != nil {
-		logger.Log("错误: 无法执行 save-all 命令")
-		os.Exit(1)
-	}
-
-	// 等待保存完成
-	waitForSaveCompletion(config.MCContainer, config.WorldDir)
-
-	// 执行备份
-	if err := performBackup(config); err != nil {
-		os.Exit(1)
-	}
-
-	// 恢复写入
-	logger.Log("恢复 Minecraft 世界写入...")
-	if err := execDockerCommand(config.MCContainer, "rcon-cli", "save-on"); err != nil {
-		logger.Log("警告: 无法执行 save-on 命令，请手动检查")
-	} else {
-		saveOnExecuted = true
 	}
 
 	// 显示最新快照信息
 	getLatestSnapshotInfo()
 
-	// 清理旧快照
-	cleanupSnapshots(config)
+	// 清理旧快照（使用共享的保留策略）
+	if len(multiConfig.Servers) > 0 {
+		cleanupSnapshots(multiConfig.Servers[0])
+	}
 
-	logger.Log("备份流程全部完成")
+	logger.Log("所有服务器备份流程全部完成")
 } 

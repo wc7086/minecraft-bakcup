@@ -51,18 +51,21 @@ go run minecraft-backup.go
 如果使用 `make install-user` 安装，程序会被安装到 `~/.local/bin`。你需要确保这个目录在 PATH 中：
 
 1. **对于 zsh 用户（macOS 默认）**：
+
    ```bash
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
    source ~/.zshrc
    ```
 
 2. **对于 bash 用户**：
+
    ```bash
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
    source ~/.bashrc
    ```
 
 3. **验证 PATH 设置**：
+
    ```bash
    echo $PATH | grep -q "$HOME/.local/bin" && echo "✓ PATH 已设置" || echo "✗ PATH 未设置"
    ```
@@ -215,4 +218,4 @@ rm -rf ~/.config/minecraft-backup
 
 ## 许可证
 
-MIT License 
+MIT License

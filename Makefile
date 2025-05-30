@@ -1,4 +1,4 @@
-# Minecraft 备份工具 Makefile
+# Minecraft 多服务器备份工具 Makefile
 
 # 变量定义
 BINARY_NAME=minecraft-backup

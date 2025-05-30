@@ -1,20 +1,15 @@
-# Minecraft 备份工具配置文件示例
+# Minecraft 多服务器备份工具配置文件示例
 # 将此文件复制为 config.toml 并修改相应的值
 
-[general]
-# Minecraft Docker 容器名称
-container_name = "minecraft-mc-1"
+[global]
+# 默认备份主机标识（当服务器未设置时使用）
+default_backup_host = "my-minecraft-server"
 
-# 世界文件目录（主机路径）
-# 支持 ~ 表示用户主目录
-world_dir = "~/docker/minecraft"
+# 是否启用并行备份（同时备份多个服务器）
+parallel_backup = false
 
-# 备份标签（用于标识和过滤备份）
-backup_tag = "minecraft-world"
-
-# 主机标识（默认为主机名）
-# 用于区分不同服务器的备份
-backup_host = "my-minecraft-server"
+# 最大并发数（仅在启用并行备份时有效）
+max_concurrency = 2
 
 [aws]
 # Cloudflare R2 访问密钥 ID
@@ -42,13 +37,81 @@ repository = "s3:https://your-account-id.r2.cloudflarestorage.com/minecraft-back
 password = "your_strong_restic_repository_password_here"
 
 [retention]
-# 快照保留策略
+# 快照保留策略（适用于所有服务器）
 # 根据你的需求调整这些值
 
 # 保留最近 N 天的每日快照
 keep_daily = 7
 
 # 保留最近 N 周的每周快照
+keep_weekly = 4
+
+# 保留最近 N 个月的每月快照
+keep_monthly = 6
+
+# 保留最近 N 个快照（不论时间）
+keep_last = 10
+
+# 服务器配置
+# 每个服务器一个配置块，格式为 [servers.服务器名称]
+
+[servers.survival]
+# 服务器描述
+description = "生存服务器"
+
+# Minecraft Docker 容器名称
+container_name = "minecraft-survival"
+
+# 世界文件目录（主机路径）
+# 支持 ~ 表示用户主目录
+world_dir = "~/docker/minecraft-survival"
+
+# 备份标签（用于标识和过滤备份）
+backup_tag = "minecraft-survival"
+
+# 主机标识（可选，未设置时使用全局默认值）
+backup_host = "my-server"
+
+# 是否启用此服务器的备份
+enabled = true
+
+[servers.creative]
+# 服务器描述
+description = "创造服务器"
+
+# Minecraft Docker 容器名称
+container_name = "minecraft-creative"
+
+# 世界文件目录（主机路径）
+world_dir = "~/docker/minecraft-creative"
+
+# 备份标签（用于标识和过滤备份）
+backup_tag = "minecraft-creative"
+
+# 主机标识（可选，未设置时使用全局默认值）
+backup_host = "my-server"
+
+# 是否启用此服务器的备份
+enabled = false
+
+[servers.modded]
+# 服务器描述
+description = "模组服务器"
+
+# Minecraft Docker 容器名称
+container_name = "minecraft-modded"
+
+# 世界文件目录（主机路径）
+world_dir = "~/docker/minecraft-modded"
+
+# 备份标签（用于标识和过滤备份）
+backup_tag = "minecraft-modded"
+
+# 主机标识（可选，未设置时使用全局默认值）
+backup_host = "my-server"
+
+# 是否启用此服务器的备份
+enabled = true
 keep_weekly = 4
 
 # 保留最近 N 月的每月快照
