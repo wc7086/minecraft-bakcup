@@ -19,16 +19,16 @@ import (
 type TOMLConfig struct {
 	// 全局配置
 	Global GlobalConfig `toml:"global"`
-	
+
 	// AWS/R2 凭证
 	AWS AWSConfig `toml:"aws"`
-	
+
 	// Restic 配置
 	Restic ResticConfig `toml:"restic"`
-	
+
 	// 备份策略
 	Retention RetentionConfig `toml:"retention"`
-	
+
 	// 服务器列表
 	Servers map[string]ServerConfig `toml:"servers"`
 }
@@ -107,31 +107,30 @@ type Config struct {
 type MultiServerConfig struct {
 	// 配置文件路径
 	ConfigFile string
-	
+
 	// 全局配置
 	ParallelBackup bool
 	MaxConcurrency int
-	
+
 	// AWS 凭证和 Restic 配置（所有服务器共享）
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
 	AWSRegion          string
 	ResticRepository   string
 	ResticPassword     string
-	
+
 	// 快照保留策略（所有服务器共享）
 	KeepDaily   int
 	KeepWeekly  int
 	KeepMonthly int
 	KeepLast    int
-	
+
 	// 服务器列表
 	Servers map[string]*Config
 }
 
 // Logger 结构体
 type Logger struct {
-	prefix string
 }
 
 // NewLogger 创建新的日志记录器
@@ -281,7 +280,7 @@ enabled = true
 `
 
 	// 格式化配置内容
-	configContent := fmt.Sprintf(sampleConfig, hostname, homeDir, hostname, homeDir, hostname, homeDir, hostname, hostname)
+	configContent := fmt.Sprintf(sampleConfig, hostname, homeDir, hostname, homeDir, hostname, homeDir, hostname)
 
 	// 写入文件，设置安全权限
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
@@ -429,7 +428,7 @@ func checkDependencies() error {
 		if err := cmd.Run(); err != nil {
 			logger.Log("错误: Docker 服务未运行")
 			logger.Log("请启动Docker服务: sudo systemctl start docker")
-			return fmt.Errorf("Docker service not running")
+			return fmt.Errorf("docker 服务未运行")
 		}
 	}
 
@@ -479,7 +478,7 @@ func showConfig(multiConfig *MultiServerConfig) {
 	}
 	logger.Log("  仓库地址: %s", repoDisplay)
 	logger.Log("")
-	
+
 	logger.Log("启用的服务器列表：")
 	for serverName, config := range multiConfig.Servers {
 		logger.Log("  [%s]", serverName)
@@ -689,7 +688,7 @@ func getLatestSnapshotInfo() {
 // backupSingleServer 备份单个服务器
 func backupSingleServer(serverName string, config *Config) error {
 	logger.Log("开始备份服务器: %s", serverName)
-	
+
 	// 检查容器是否运行
 	if err := checkContainerRunning(config.MCContainer); err != nil {
 		return fmt.Errorf("服务器 %s: %v", serverName, err)
@@ -761,7 +760,7 @@ func backupServersSequential(multiConfig *MultiServerConfig) error {
 	logger.Log("备份结果摘要:")
 	logger.Log("  成功: %d 个服务器", successCount)
 	logger.Log("  失败: %d 个服务器", len(failedServers))
-	
+
 	if len(failedServers) > 0 {
 		logger.Log("  失败的服务器: %s", strings.Join(failedServers, ", "))
 		return fmt.Errorf("部分服务器备份失败")
@@ -785,7 +784,7 @@ func backupServersParallel(multiConfig *MultiServerConfig) error {
 		wg.Add(1)
 		go func(name string, cfg *Config) {
 			defer wg.Done()
-			
+
 			// 获取信号量
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
@@ -812,7 +811,7 @@ func backupServersParallel(multiConfig *MultiServerConfig) error {
 	logger.Log("并行备份结果摘要:")
 	logger.Log("  成功: %d 个服务器", successCount)
 	logger.Log("  失败: %d 个服务器", len(failedServers))
-	
+
 	if len(failedServers) > 0 {
 		logger.Log("  失败的服务器: %s", strings.Join(failedServers, ", "))
 		return fmt.Errorf("部分服务器备份失败")
@@ -893,12 +892,12 @@ func main() {
 	}
 
 	// 尝试加载配置文件
-	multiConfig, err := loadConfig(configPath)
+	config, err := loadConfig(configPath)
 	if err != nil {
 		if strings.Contains(err.Error(), "配置文件不存在") {
 			logger.Log("配置文件不存在: %s", configPath)
 			logger.Log("")
-			
+
 			// 创建示例配置文件
 			if err := createSampleConfig(configPath); err != nil {
 				logger.Log("创建配置文件失败: %v", err)
@@ -906,7 +905,7 @@ func main() {
 			}
 			os.Exit(0)
 		}
-		
+
 		logger.Log("加载配置文件失败: %v", err)
 		os.Exit(1)
 	}
@@ -921,21 +920,14 @@ func main() {
 	}
 
 	// 显示当前配置
-	showConfig(multiConfig)
+	showConfig(config)
 
 	logger.Log("开始多服务器备份流程...")
-	logger.Log("共 %d 个服务器需要备份", len(multiConfig.Servers))
+	logger.Log("共 %d 个服务器需要备份", len(config.Servers))
 
 	// 备份所有启用的服务器
-	if err := backupAllServers(multiConfig); err != nil {
-		logger.Log("备份流程完成，但存在错误: %v", err)
-		// 显示最新快照信息
-		getLatestSnapshotInfo()
-		// 清理旧快照（使用第一个服务器的配置）
-		for _, config := range multiConfig.Servers {
-			cleanupSnapshots(config)
-			break
-		}
+	if err := backupAllServers(config); err != nil {
+		logger.Log("备份过程中发生错误: %v", err)
 		os.Exit(1)
 	}
 
@@ -943,9 +935,13 @@ func main() {
 	getLatestSnapshotInfo()
 
 	// 清理旧快照（使用共享的保留策略）
-	if len(multiConfig.Servers) > 0 {
-		cleanupSnapshots(multiConfig.Servers[0])
+	if len(config.Servers) > 0 {
+		// 获取任意一个服务器配置用于清理（因为保留策略是共享的）
+		for _, serverConfig := range config.Servers {
+			cleanupSnapshots(serverConfig)
+			break
+		}
 	}
 
 	logger.Log("所有服务器备份流程全部完成")
-} 
+}
